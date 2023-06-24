@@ -1,15 +1,34 @@
 import cv2 as cv2
 import numpy as np
+from sklearn.linear_model import (
+    LinearRegression,
+    TheilSenRegressor,
+    RANSACRegressor,
+    HuberRegressor,
+)
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import make_pipeline
+from scipy.optimize import curve_fit
+import matplotlib as plt
+estimators = [
+    ("OLS", LinearRegression()),
+    ("Theil-Sen", TheilSenRegressor(random_state=42)),
+    ("RANSAC", RANSACRegressor(random_state=42)),
+    ("HuberRegressor", HuberRegressor()),
+]
 
 # Load the image
-image = cv2.imread('data/image0100.jpg')
+image = cv2.imread('data/image0120.jpg')
+image_width = image.shape[1]
+image_height = image.shape[0]
+print(image.shape)
 # cv2.imshow('show',image)
 image = cv2.GaussianBlur(image, (3, 3), 0)
 image = cv2.GaussianBlur(image, (3, 3), 0)
 image = cv2.GaussianBlur(image, (3, 3), 0)
 # Create a list to store the selected points
 points = []
-
 # Mouse click event handler
 def mouse_callback(event, x, y, flags, param):
     if event == cv2.EVENT_LBUTTONDOWN:
@@ -21,25 +40,24 @@ def mouse_callback(event, x, y, flags, param):
         cv2.imshow('Image', image)
 
 # Create a window and bind the mouse callback function
-cv2.namedWindow('Image')
-cv2.setMouseCallback('Image', mouse_callback)
+# cv2.namedWindow('Image')
+# cv2.setMouseCallback('Image', mouse_callback)
 
-# Display the image and wait for points selection
-cv2.imshow('Image', image)
-cv2.waitKey(0)
-print(points)
+# # Display the image and wait for points selection
+# cv2.imshow('Image', image)
+# cv2.waitKey(0)
 # Check if four points have been selected
-if len(points) == 4:
+if len(points) == 0:
     # Define the four source points (selected points)
     points_defined = [(520,265),(1372,265),(1844,745),(74,745)] # Defined points that would give somewhat perspective transform
-    src_points = np.float32(points) 
+    src_points = np.float32(points_defined) 
 
     # Define the four destination points for the perspective transform
     # This will define a rectangle in the transformed image
     # Adjust the destination points based on your desired perspective
-    # dst_points = np.float32([[0, 0], [image.shape[1], 0], [image.shape[1], image.shape[0]], [0, image.shape[0]]]) # points will be transformed to whole image
+    dst_points = np.float32([[0, 0], [image.shape[1], 0], [image.shape[1], image.shape[0]], [0, image.shape[0]]]) # points will be transformed to whole image
     # dst_points = np.float32([(74,265),(1844,265),(1844,745),(74,745)])
-    dst_points = np.float32([(points[3][0],points[0][1]),(points[2][0],points[0][1]),points[2],points[3]])
+    #dst_points = np.float32([(points[3][0],points[0][1]),(points[2][0],points[0][1]),points[2],points[3]])
     # Compute the perspective transform matrix
     perspective_matrix = cv2.getPerspectiveTransform(src_points, dst_points)
     inverse_perspective_matrix = np.linalg.inv(perspective_matrix)
@@ -73,6 +91,7 @@ if len(points) == 4:
       binary_image = np.array(combined_binary, dtype=np.uint8) * 255
       return binary_image
     binary_image = sobel_filtering(image)
+    cv2.imshow('edge image',binary_image)
     binary_image = cv2.warpPerspective(binary_image, perspective_matrix, (image.shape[1], image.shape[0]))
     # cv2.imshow('Warped Image', binary_image)
     def sliding_window(binary_image, n_windows=9, margin=200, min_pixels=100):
@@ -129,7 +148,6 @@ if len(points) == 4:
       # Concatenate the arrays of indices
       left_lane_inds = np.concatenate(left_lane_inds)
       right_lane_inds = np.concatenate(right_lane_inds)
-
       return left_lane_inds, right_lane_inds
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     # binary_image = 5 * binary_image - (np.roll(binary_image, 1, axis=0) + np.roll(binary_image, -1, axis=0) +
@@ -151,17 +169,85 @@ if len(points) == 4:
     nonzerox = np.array(nonzero[1])
     # Moving Average - Apply a moving average window
     window_size = 25  # Window size for moving average
-    
     leftx = nonzerox[left_lane_inds]
     lefty = nonzeroy[left_lane_inds]
+    rightx = nonzerox[right_lane_inds]
+    righty = nonzeroy[right_lane_inds]
+    np.save('rightx.npy', rightx)
+    np.save('righty.npy',righty)
+    def model_f(x, a, b, c):
+      return a*(x-b)**2 + c
+
+    popt_l, pcov_l = curve_fit(model_f, leftx, lefty, p0=[3,2,-16])
+    a_opt_l, b_opt_l, c_opt_l = popt_l
+    
+    x_model_l = np.linspace(min(leftx), max(leftx), 1000)
+
+    y_model_l = model_f(x_model_l, a_opt_l, b_opt_l, c_opt_l)
+    x_model_l = np.int32(x_model_l)
+    y_model_l = np.int32(y_model_l)
+    coordinates_l = [(x, y) for x, y in zip(x_model_l, y_model_l)]
+    clamped_points_l = []
+    for x, y in coordinates_l:
+      if (x> 0 and x<image_width -1) and (y>0 and y<image_height):
+        clamped_points_l.append((x, y))
+    x_coordinates_l = [x for x, _ in clamped_points_l]
+    y_coordinates_l = [y for _, y in clamped_points_l]
+    try:
+      popt_r, pcov_r = curve_fit(model_f, rightx, righty, p0=[3,2,-16])
+      a_opt_r, b_opt_r, c_opt_r= popt_r
+      x_model_r = np.linspace(min(rightx), max(rightx), 1000)
+
+      y_model_r = model_f(x_model_r, a_opt_r, b_opt_r, c_opt_r)
+      x_model_r = np.int32(x_model_r)
+      y_model_r = np.int32(y_model_r)
+      print(y_model_r)
+      coordinates_r = [(x, y) for x, y in zip(x_model_r, y_model_r)]
+      clamped_points_r = []
+      for x, y in coordinates_r:
+        if (x> 0 and x<image_width -1) and (y>0 and y<image_height):
+          clamped_points_r.append((x, y))
+      x_coordinates_r = [x for x, _ in clamped_points_r]
+      y_coordinates_r = [y for _, y in clamped_points_r]
+    except:
+      out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]  # Mark left lane pixels in red
+      out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]  # Mark right lane pixels in blue
+      out_img[y_coordinates_l, x_coordinates_l] = [0, 255, 0]  # Mark left lane pixels in red
+
+
+
+    # Get the inlier mask and fitted polynomial coefficients
+    #inlier_mask = ransac.inlier_mask_
+    #poly_coefficients = ransac.estimator_.coef_
+    # Extract the inlier points for visualization or further analysis
+    #inlier_points = leftx[inlier_mask], lefty[inlier_mask]
+
+    # # Display the curve image
+    # cv2.imshow('Fitted Curve', curve_image)
+    # # Retrieve the best line parameters
+    # slope = ransac.estimator_.coef_[0][0]
+    # intercept = ransac.estimator_.intercept_[0]
+
+    # # Calculate the endpoints of the line
+    # x1 = 0
+    # y1 = int(intercept)
+    # x2 = binary_image.shape[1]
+    # y2 = int(slope * x2 + intercept)
+
+    # # Plot the fitted line on the binary image
+    # line_image = np.zeros_like(binary_image)
+    # cv2.line(line_image, (x1, y1), (x2, y2), color=255, thickness=2)
+    # cv2.imshow('test',line_image)
+    
     # left_fit = np.polyfit(lefty, leftx, 2)
     # ploty = np.linspace(0, binary_image.shape[0]-1, binary_image.shape[0] )
     # left_fitx = left_fit[0]*ploty**2 +left_fit[1]*ploty + left_fit[2]
 	  # right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
 	  #right_fit = np.polyfit(righty, rightx, 2)
-    out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]  # Mark left lane pixels in red
-    out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]  # Mark right lane pixels in blue
-    # out_img[np.int32(left_fitx), np.int32(ploty)] = [255, 0, 0]  # Mark left lane pixels in red
+    # out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]  # Mark left lane pixels in red
+    # out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]  # Mark right lane pixels in blue
+    # out_img[y_coordinates_l, x_coordinates_l] = [0, 255, 0]  # Mark left lane pixels in red
+    # out_img[y_coordinates_r,x_coordinates_r] = [0,255,0]
     # out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]  # Mark right lane pixels in blue
     # Display the original image with selected points and the warped image
     #cv2.imshow('Image with Points', image)
